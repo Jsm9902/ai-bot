@@ -1,0 +1,35 @@
+# --- 기존 웹 및 기본 유틸리티 ---
+fastapi==0.115.0
+uvicorn==0.30.6
+python-multipart==0.0.12
+python-dotenv==1.2.2
+jinja2==3.1.4
+requests==2.33.1
+tqdm==4.67.3
+
+# --- RAG 핵심 프레임워크 (버전 고정) ---
+langchain==0.3.0
+langchain-community==0.3.0
+langchain-core==0.3.0
+langchain-ollama==0.2.0
+langchain-chroma==0.1.4
+langchain-text-splitters==0.3.0
+langsmith==0.1.147
+chromadb==0.5.23
+rank-bm25==0.2.2
+
+# --- OCR 및 고해상도 PDF 분석 (새로 추가 및 최적화) ---
+unstructured[pdf]==0.22.27
+pdf2image==1.17.0
+pdfminer.six==20260107
+pillow==12.2.0
+# 핵심: numpy와 opencv는 버전 충돌 방지를 위해 범위를 지정합니다.
+numpy<2.0.0,>=1.26.0
+opencv-python<4.11.0
+transformers>=4.40.0
+tokenizers<=0.20.3
+
+# --- 기타 검색 보조 ---
+FlashRank==0.2.10
+onnxruntime==1.25.1
+pypdf==5.0.0
