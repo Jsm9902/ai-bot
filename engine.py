@@ -1,47 +1,69 @@
 import os
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import FlashrankRerank
-from config import MODEL_NAME, DB_PATH, UPLOAD_DIR
+import pdfplumber
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+from chromadb.config import Settings
+from config import DB_PATH, UPLOAD_DIR
+from utils import clean_text
 
 class RAGEngine:
     def __init__(self):
-        self.vectorstore = None
         self.compression_retriever = None
+        # [수정] 사용자님 환경에 맞는 전용 임베딩 모델로 고정
+        self.embeddings = OllamaEmbeddings(model="mxbai-embed-large")
 
     def setup_engine(self):
-        # 1. 문서 로딩 시작 (로그 출력)
+        if self.compression_retriever is not None:
+            return self.compression_retriever
+
+        if not os.path.exists(UPLOAD_DIR) or not os.listdir(UPLOAD_DIR):
+            return None
+        
+        print(f"\n[시스템] '{self.embeddings.model}' 모델 기반 인덱싱을 시작합니다...")
+        
         all_docs = []
-        if os.path.exists(UPLOAD_DIR):
-            for file in os.listdir(UPLOAD_DIR):
-                if file.endswith(".pdf"):
-                    loader = PyPDFLoader(os.path.join(UPLOAD_DIR, file))
-                    all_docs.extend(loader.load())
-                    print(f"✅ {file} 로드 완료")
+        for filename in os.listdir(UPLOAD_DIR):
+            if filename.endswith(".pdf"):
+                try:
+                    with pdfplumber.open(os.path.join(UPLOAD_DIR, filename)) as pdf:
+                        for i, page in enumerate(pdf.pages):
+                            text = page.extract_text()
+                            if text:
+                                all_docs.append(Document(
+                                    page_content=clean_text(text),
+                                    metadata={"source": filename, "page": i}
+                                ))
+                    print(f"✅ {filename} 로드 완료")
+                except Exception as e:
+                    print(f"❌ {filename} 실패: {e}")
 
-        # 2. 텍스트 분할 및 임베딩 설정
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        split_docs = text_splitter.split_documents(all_docs)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
+        split_docs = splitter.split_documents(all_docs)
         
-        # [핵심] 기존 Bllossom 모델(MODEL_NAME)만 사용하도록 고정
-        embeddings = OllamaEmbeddings(model=MODEL_NAME)
+        vectorstore = Chroma(
+            persist_directory=DB_PATH, 
+            embedding_function=self.embeddings,
+            client_settings=Settings(is_persistent=True, anonymized_telemetry=False)
+        )
         
-        self.vectorstore = Chroma.from_documents(
-            documents=split_docs,
-            embedding=embeddings,
-            persist_directory=DB_PATH
+        # [수정] 사용자님의 강력한 앙상블 검색 설정 복구
+        bm25 = BM25Retriever.from_documents(split_docs)
+        bm25.k = 15 
+        
+        vector_r = vectorstore.as_retriever(
+            search_type="mmr", 
+            search_kwargs={"k": 15, "fetch_k": 40, "lambda_mult": 0.7}
         )
 
-        # 3. 검색 리트리버 구성
-        compressor = FlashrankRerank(model="ms-marco-MultiBERT-L-12")
-        base_retriever = self.vectorstore.as_retriever(search_kwargs={"k": 10})
-        self.compression_retriever = ContextualCompressionRetriever(
-            base_compressor=compressor, 
-            base_retriever=base_retriever
+        self.compression_retriever = EnsembleRetriever(
+            retrievers=[bm25, vector_r], 
+            weights=[0.55, 0.45] 
         )
-        print("[시스템] 초기 문서 로드 완료! 챗봇이 준비되었습니다.\n")
+        print("[시스템] 준비 완료!\n")
+        return self.compression_retriever
 
 rag_engine = RAGEngine()
