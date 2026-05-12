@@ -62,9 +62,9 @@ class RAGEngine:
         vector_r = vectorstore.as_retriever(
             search_type="mmr", 
             search_kwargs={
-                "k": 15, 
-                "fetch_k": 40, 
-                "lambda_mult": 0.7
+               "k": 15,           # 13에서 10으로 하향하여 정예화
+                "fetch_k": 40,     # 너무 넓게 찾기보다 핵심 위주로 후보 추출
+                "lambda_mult": 0.7 # 중복을 피하고 연관성을 유지하는 밸런스
             }
         )
 

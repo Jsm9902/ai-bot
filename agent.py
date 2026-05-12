@@ -42,7 +42,7 @@ async def stream_answer(query: str, history):
     # 5. STEP 2: 밀도 분석 및 하이브리드 가중치 정렬 (보정 로직)
     temp_sources = []
     seen = set()
-    THRESHOLD = 0.12 # 요약 답변을 위해 임계값을 약간 낮추어 정답 누락 방지
+    THRESHOLD = 0.11 # 요약 답변을 위해 임계값을 약간 낮추어 정답 누락 방지
     response_words = set([w for w in full_response.split() if len(w) >= 2])
 
     print(f"\n[STEP 2] 하이브리드 가중치 정렬 분석 (Threshold: {THRESHOLD})")
@@ -64,7 +64,7 @@ async def stream_answer(query: str, history):
         
         # 2. 최종 점수 산출 (검색 순위 60% + 매칭 밀도 40%)
         # 이를 통해 '우연히 단어만 겹치는 노이즈'는 엔진 순위가 낮아 뒤로 밀립니다.
-        final_score = (search_rank_score * 0.4) + (match_density * 0.6)
+        final_score = (search_rank_score * 0.5) + (match_density * 0.5)
 
         status = "✅ PASS" if match_density >= THRESHOLD else "❌ DROP"
         print(f"{status:^8} | {f[:30]:<35} (p.{p}) | 밀도:{match_density:.4f} | 보정점수:{final_score:.4f}")
