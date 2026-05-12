@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>AI PDF Expert Analyzer</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="sidebar">
+        <h3 style="font-size:0.8rem; color:#8e8ea0; margin-bottom:5px;">Knowledge Base</h3>
+        <div id="usageDisplay" class="usage-info">0MB / 200MB</div>
+        
+        <div id="uploadStatus" class="upload-status-msg">
+            <span class="spinner">⏳</span> <strong id="statusTitle">처리 중...</strong>
+            <p id="statusDesc" style="margin: 5px 0 0 0; font-size: 0.7rem; color: #abb2bf;"></p>
+        </div>
+
+        <div id="fileList"></div>
+        
+        <div style="padding-top:15px; border-top:1px solid #4d4d4d; margin-top: auto;">
+            <button id="uploadBtn" onclick="document.getElementById('hiddenFile').click()" style="width:100%; padding:12px; background:#444654; color:white; border-radius:8px; border:none; cursor:pointer;">+ Upload PDF</button>
+            <input type="file" id="hiddenFile" multiple accept=".pdf" style="display:none" onchange="uploadFile()">
+        </div>
+    </div>
+
+    <div class="main-panel">
+        <div class="chat-area" id="chatArea">
+            <div id="welcomeMsg">
+                <h2>안녕하세요! AI 챗봇입니다.</h2>
+                <p>문서를 업로드하고 궁금한 점을 물어보세요. ✨</p>
+            </div>
+        </div>
+        
+        <div class="input-area">
+            <div class="input-container">
+                <input type="text" id="questionInput" placeholder="질문을 입력하세요..." onkeyup="if(event.keyCode==13)askQuestion()">
+                <button id="sendBtn" onclick="askQuestion()">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+                    </svg>
+                </button>
+            </div>
+            <p id="loading">🔍 대화 맥락을 분석하여 답변 중입니다...</p>
+        </div>
+    </div>
+
+    <div class="viewer-panel" id="viewerPanel">
+        <button class="close-btn" onclick="closeViewer()">X</button>
+        <iframe id="pdfViewer"></iframe>
+    </div>
+
+    <script src="/static/js/chat.js"></script>
+</body>
+</html>
