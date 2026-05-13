@@ -34,7 +34,7 @@ async def stream_answer(query: str, history):
 
     # [2단계] 문서 검색
     retrieved_docs = rag_engine.compression_retriever.invoke(expanded_query)
-    all_candidates = retrieved_docs[:12] if retrieved_docs else []
+    all_candidates = retrieved_docs[:14] if retrieved_docs else []
 
     # [3단계] 답변 생성 (도입부 변수 없이 context만 전달)
     chain = create_stuff_documents_chain(llm, get_qa_prompt())
