@@ -3,100 +3,93 @@ import os
 import re
 from langchain_ollama import ChatOllama
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import PromptTemplate
 from config import MODEL_NAME
 from engine import rag_engine
-from prompts import get_qa_prompt
+from prompts import get_qa_prompt, QUERY_EXPANSION_PROMPT
+
+def calculate_fuzzy_density(target_content, response_text):
+    if not response_text or len(response_text.strip()) < 2:
+        return 0.0
+    clean_target = re.sub(r'\s+', '', target_content).lower()
+    response_words = [w for w in response_text.split() if len(w) >= 2]
+    if not response_words: return 0.0
+    match_count = sum(1 for w in response_words if w.replace(" ", "").lower() in clean_target)
+    return match_count / len(response_words)
 
 async def stream_answer(query: str, history):
     if rag_engine.compression_retriever is None:
         rag_engine.setup_engine()
     
+    # [1단계] 의미 기반 쿼리 확장 및 터미널 출력
+    expansion_llm = ChatOllama(model=MODEL_NAME, temperature=0)
+    expansion_prompt = PromptTemplate.from_template(QUERY_EXPANSION_PROMPT)
+    expansion_chain = expansion_prompt | expansion_llm
+    expanded_result = await expansion_chain.ainvoke({"input": query})
+    expanded_query = expanded_result.content.strip()
+    
+    print(f"\n{'*' * 85}\n[PRE-PROCESS] 의미 확장 쿼리: {expanded_query}\n{'*' * 85}")
+
     llm = ChatOllama(model=MODEL_NAME, temperature=0.02, streaming=True)
 
-    # 1. 문서 검색 (STEP 1)
-    retrieved_docs = rag_engine.compression_retriever.invoke(query)
+    # [2단계] 문서 검색
+    retrieved_docs = rag_engine.compression_retriever.invoke(expanded_query)
     all_candidates = retrieved_docs[:12] if retrieved_docs else []
 
-    # 키워드 추출 (특수문자 포함 대응)
-    query_keywords = [w.strip() for w in re.split(r'\s+', query) if len(w) >= 2]
-
-    print(f"\n{'='*85}\n[STEP 1] 엔진 검색 후보군 (TOP {len(all_candidates)})")
-    for i, doc in enumerate(all_candidates, 1):
-        fname = os.path.basename(doc.metadata.get('source', 'unknown'))
-        page = doc.metadata.get('page', 0) + 1
-        print(f"  {i:>2}순위: {fname:<40} (p.{page})")
-    print(f"{'='*85}")
-
-    # 2. 사전 컨텍스트 전달 (AI가 모든 정보를 보도록 제한 완화)
-    # 엔진이 찾은 12개 후보를 AI가 일단 모두 보게 하여 "정보 없음" 오류를 방지합니다.
-    context_docs = all_candidates
-
-    # 3. 답변 생성 스트리밍
+    # [3단계] 답변 생성 (도입부 변수 없이 context만 전달)
     chain = create_stuff_documents_chain(llm, get_qa_prompt())
     full_response = ""
+    
     async for chunk in chain.astream({
         "input": query, 
         "chat_history": history.messages, 
-        "context": context_docs
+        "context": all_candidates
     }):
         yield f"data: {json.dumps({'type': 'content', 'delta': chunk})}\n\n"
         full_response += chunk
 
-    # 4. [STEP 2] 후행 정밀 검증 (요청하신 0.05 격차 및 기준점 보정)
+    # [4단계] 후행 검증 및 터미널 로그 출력
     temp_sources = []
     seen = set()
-    response_words = set([w for w in full_response.split() if len(w) >= 2])
-
-    densities = []
-    for d in all_candidates:
-        content_words = [w for w in d.page_content.split() if len(w) >= 2]
-        if not content_words:
-            densities.append(0); continue
-        m_count = sum(1 for w in content_words if w in response_words)
-        densities.append(m_count / len(content_words))
-
-    # [수정 사항] 전체 후보 중 '가장 높은 밀도'를 기준으로 설정
+    STRICT_GAP = 0.05
+    
+    densities = [calculate_fuzzy_density(d.page_content, full_response) for d in all_candidates]
     absolute_max_density = max(densities) if densities else 0
-    # [수정 사항] 요청하신 초정밀 격차 0.05 적용
-    STRICT_GAP = 0.05 
 
-    print(f"\n[STEP 2] 초정밀 격차 필터링 (최대 밀도: {absolute_max_density:.4f} / Gap: {STRICT_GAP})")
+   # 터미널에 로그 출력 (기존 유지)
+    print(f"\n[STEP 2] 후행 검증 (Fuzzy MAX Density: {absolute_max_density:.4f})")
     print(f"{'-'*85}")
-    
-    for i, d in enumerate(all_candidates, 1):
-        f = os.path.basename(d.metadata.get('source', ''))
-        p = d.metadata.get('page', 0) + 1
-        match_density = densities[i-1]
-        
-        search_rank_score = (len(all_candidates) - i + 1) / len(all_candidates)
-        final_score = (search_rank_score * 0.5) + (match_density * 0.5)
-        
-        has_match = (match_density > 0)
-        has_query_keyword = any(kw.lower() in d.page_content.lower() for kw in query_keywords)
 
-        # --- [요청하신 정밀 통과 로직] ---
-        # 1. 진짜 최대 밀도 문서는 PASS
-        if match_density == absolute_max_density and has_match:
-            is_relevant = True
-        # 2. 나머지는 키워드가 있고 격차가 0.05 이내여야 함
+    if "확인불가" not in full_response:
+        # 💡 핵심 수정: 밀도가 0이더라도 LLM이 답변을 생성했다면 
+        # (즉, 임베딩 검색은 성공해서 context에 데이터가 있었다면)
+        # 1순위 문서는 일단 PASS 시켜서 출처가 누락되지 않게 합니다.
+        
+        if absolute_max_density > 0:
+            best_idx = densities.index(absolute_max_density)
         else:
-            is_relevant = has_query_keyword and (absolute_max_density - match_density <= STRICT_GAP)
-            # 엔진 1순위 보호 (최대 밀도의 30% 수준 유지 시)
-            if i == 1 and has_match and (match_density >= absolute_max_density * 0.3):
-                is_relevant = True
+            best_idx = 0 # 밀도가 0이어도 검색 1순위 문서를 기준으로 잡음
+            
+        best_d = all_candidates[best_idx]
+        f_name = os.path.basename(best_d.metadata.get('source', '문서'))
+        f_page = best_d.metadata.get('page', 0) + 1
+        
+        source_text = f"\n\n---\n💡 자세한 정보는 [{f_name}, p.{f_page}]에서 추가적으로 더 찾아보세요."
+        yield f"data: {json.dumps({'type': 'content', 'delta': source_text})}\n\n"
 
-        status = "✅ PASS" if (final_score >= 0.35 and is_relevant) else "❌ DROP"
-        print(f"{status:^8} | {f[:30]:<35} (p.{p}) | 밀도:{match_density:.4f} | 보정점수:{final_score:.4f}")
+        for i, (d, match_density) in enumerate(zip(all_candidates, densities), 1):
+            f = os.path.basename(d.metadata.get('source', 'unknown'))
+            p = d.metadata.get('page', 0) + 1
+            
+            # 밀도가 0이어도 1순위거나, 최고 밀도와 차이가 적으면 PASS
+            is_relevant = (absolute_max_density - match_density <= STRICT_GAP) or (i == 1 and absolute_max_density == 0)
+            
+            status = "✅ PASS" if is_relevant else "❌ DROP"
+            print(f"{status:^8} | {f[:30]:<35} (p.{p}) | 밀도:{match_density:.4f}")
 
-        if status == "✅ PASS" and f"{f}_{p}" not in seen:
-            temp_sources.append({
-                "file": f, "page": p, "score": final_score,
-                "snippet": d.page_content[:150].replace('\n', ' ') + "..."
-            })
-            seen.add(f"{f}_{p}")
+            if is_relevant and f"{f}_{p}" not in seen:
+                temp_sources.append({"file": f, "page": p, "snippet": d.page_content[:150].strip() + "..."})
+                seen.add(f"{f}_{p}")
 
-    temp_sources.sort(key=lambda x: x['score'], reverse=True)
-    sources = [{"file": s['file'], "page": s['page'], "snippet": s['snippet']} for s in temp_sources]
-    
-    yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
+    yield f"data: {json.dumps({'type': 'sources', 'data': temp_sources})}\n\n"
     yield "data: [DONE]\n\n"

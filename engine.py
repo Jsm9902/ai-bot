@@ -41,7 +41,7 @@ class RAGEngine:
                 except Exception as e:
                     print(f"❌ {filename} 실패: {e}")
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1100, chunk_overlap=300)
         split_docs = splitter.split_documents(all_docs)
         
         vectorstore = Chroma(
@@ -61,7 +61,7 @@ class RAGEngine:
 
         self.compression_retriever = EnsembleRetriever(
             retrievers=[bm25, vector_r], 
-            weights=[0.55, 0.45] 
+            weights=[0.7, 0.3] 
         )
         print("[시스템] 준비 완료!\n")
         return self.compression_retriever
